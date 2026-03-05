@@ -3,51 +3,139 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>Sales Scout Pro - Industrie Edition</title>
+    <title>Sales Scout Pro</title>
     
-    <!-- Frameworks via CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <style>
-        #map { height: 50vh; width: 100%; z-index: 1; }
+        /* WICHTIG: Explizite Höhen für HTML und Body, damit #map weiß, wie groß 50% sind */
+        html, body { height: 100%; margin: 0; padding: 0; }
+        
+        #map { 
+            height: 50vh; /* 50% der Bildschirmhöhe */
+            width: 100%; 
+            display: block; /* Sicherstellen, dass es kein Inline-Element ist */
+            background-color: #e5e7eb; /* Grauer Platzhalter, falls Karte lädt */
+        }
+        
         .visited-marker { filter: grayscale(100%) opacity(0.5) !important; }
         .loading-spinner { border-top-color: #3b82f6; animation: spinner 1s linear infinite; }
         @keyframes spinner { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        /* Fix für Leaflet Popups auf Mobile */
-        .leaflet-popup-content { min-width: 200px; }
     </style>
 </head>
-<body class="bg-gray-100 font-sans text-gray-900">
+<body class="bg-gray-100 font-sans">
 
-    <!-- Header -->
     <div class="p-4 bg-slate-900 text-white shadow-lg flex justify-between items-center sticky top-0 z-[2000]">
         <div>
             <h1 class="text-xl font-bold">Sales Scout Pro 🚀</h1>
             <p class="text-xs text-slate-400">Industrie & Großhandel Finder</p>
         </div>
-        <button onclick="updateLocation()" class="bg-slate-700 hover:bg-slate-600 p-3 rounded-full transition-colors">
-            📍
+        <button onclick="updateLocation()" class="bg-slate-700 p-3 rounded-full">📍</button>
+    </div>
+
+    <!-- Der Karten-Container -->
+    <div id="map"></div>
+
+    <div class="p-4 bg-white shadow-md rounded-t-3xl -mt-6 relative z-[1500] space-y-4">
+        <select id="industrySelect" class="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 font-medium">
+            <option value='["industrial"~"factory|works"]'>🏭 Fertigung & Produktion</option>
+            <option value='["landuse"="industrial"]'>🏗️ Industriegebiete (allg.)</option>
+            <option value='["shop"="wholesale"]'>📦 Großhandel (allgemein)</option>
+            <option value='["shop"="wholesale"]["wholesale"~"electrical|electronics"]'>⚡ Elektrogroßhandel</option>
+            <option value='["craft"~"electrician|hvac|mechanic"]'>🛠️ Instandhaltung & Handwerk</option>
+        </select>
+
+        <button onclick="fetchIndustryData()" id="searchBtn"
+                class="w-full bg-blue-600 text-white font-bold py-4 rounded-2xl shadow-lg flex justify-center items-center">
+            <span id="btnText">Umgebung scannen</span>
         </button>
     </div>
 
-    <!-- Karte -->
-    <div id="map"></div>
+    <div id="resultList" class="p-4 space-y-3 pb-10"></div>
 
-    <!-- UI Panel -->
-    <div class="p-4 bg-white shadow-md rounded-t-3xl -mt-6 relative z-[1500] space-y-4">
-        <div>
-            <label class="block text-sm font-semibold text-gray-600 mb-2 ml-1">Zielbranche wählen:</label>
-            <select id="industrySelect" class="w-full p-4 bg-gray-50 border border-gray-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-blue-500 text-gray-800 font-medium transition-all">
-                <option value='["industrial"~"factory|works"]'>🏭 Fertigung & Produktion</option>
-                <option value='["landuse"="industrial"]'>🏗️ Industriegebiete (allg.)</option>
-                <option value='["shop"="wholesale"]'>📦 Großhandel (allgemein)</option>
-                <option value='["shop"="wholesale"]["wholesale"~"electrical|electronics"]'>⚡ Elektrogroßhandel</option>
-                <option value='["craft"~"electrician|hvac|mechanic"]'>🛠️ Instandhaltung & Handwerk</option>
-                <option value='["office"="industrial"]'>🏢 Industriebüros</option>
-            </select>
-        </div>
+    <script>
+        // Karte erst initialisieren, wenn das Fenster geladen ist
+        let map;
+        let markerGroup;
+        let userMarker;
 
-        <button onclick="fetchIndustryData()" id="searchBtn"
-                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold
+        window.onload = function() {
+            map = L.map('map', { zoomControl: false }).setView([51.1, 10.4], 6);
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OSM'
+            }).addTo(map);
+
+            markerGroup = L.layerGroup().addTo(map);
+            
+            // Sofort versuchen zu orten
+            setTimeout(updateLocation, 500);
+        };
+
+        function updateLocation() {
+            if (!navigator.geolocation) return;
+            navigator.geolocation.getCurrentPosition(pos => {
+                const latlng = [pos.coords.latitude, pos.coords.longitude];
+                map.setView(latlng, 14);
+                if (userMarker) map.removeLayer(userMarker);
+                userMarker = L.circleMarker(latlng, { color: '#ef4444', radius: 8 }).addTo(map);
+                
+                // WICHTIG: Karte zwingen, ihre Größe neu zu berechnen
+                setTimeout(() => { map.invalidateSize(); }, 400);
+            });
+        }
+
+        async function fetchIndustryData() {
+            const btn = document.getElementById('searchBtn');
+            const btnText = document.getElementById('btnText');
+            const list = document.getElementById('resultList');
+            const industryQuery = document.getElementById('industrySelect').value;
+            const center = map.getCenter();
+            
+            btn.disabled = true;
+            btnText.innerHTML = 'Suche läuft...';
+            markerGroup.clearLayers();
+            list.innerHTML = "";
+
+            const query = `[out:json][timeout:50];(nwr${industryQuery}(around:2500, ${center.lat}, ${center.lng}););out center 100;`;
+            const url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (!data.elements || data.elements.length === 0) {
+                    list.innerHTML = "<p class='text-center p-4 italic text-gray-500'>Keine Firmen gefunden.</p>";
+                    return;
+                }
+
+                data.elements.forEach(el => {
+                    const lat = el.lat || el.center.lat;
+                    const lon = el.lon || el.center.lng;
+                    const tags = el.tags || {};
+                    const name = tags.name || "Gewerbeobjekt";
+                    
+                    const marker = L.marker([lat, lon]).addTo(markerGroup);
+                    marker.bindPopup(`<b>${name}</b><br><a href="https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}" target="_blank">Navigation</a>`);
+                    
+                    marker.on('click', function() {
+                        if (this._icon) this._icon.classList.add('visited-marker');
+                    });
+
+                    const card = document.createElement('div');
+                    card.className = "bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500 flex justify-between items-center";
+                    card.innerHTML = `<h3 class="font-bold text-sm">${name}</h3><button onclick="map.setView([${lat}, ${lon}], 17)" class="text-blue-600">🎯</button>`;
+                    list.appendChild(card);
+                });
+            } catch (e) {
+                alert("Fehler bei der Abfrage.");
+            } finally {
+                btn.disabled = false;
+                btnText.innerHTML = 'Umgebung scannen';
+            }
+        }
+    </script>
+</body>
+</html>
